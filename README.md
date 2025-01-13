@@ -1,2 +1,2 @@
 # Gamma
-When using the GammaPreproc pipeline you need the trialfun_visgam trial funtion to run the script.
+When using Gamma_TFR you need the trialfun_visgam trial function to run the script.
