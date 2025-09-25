@@ -1,0 +1,250 @@
+% Define the directory containing the BrainVision files
+    sub = 'IT001-013';
+    data_dir = fullfile('D:\Users\melis\Documents\SANIONA\Cohort2\Data', sub); 
+    putstuff = 'D:\Users\melis\Documents\SANIONA\Cohort2';
+
+
+%% 1: Load, preprocess, and save filtered data
+    
+    % Create Output direction
+    preproc_dir                 =  fullfile(putstuff, 'Preprocessed', (sub));                                       % Directory to save preprocessed files
+    if ~exist(preproc_dir, 'dir')
+        mkdir(preproc_dir);                                                                                 % Create output directory if it doesn't exist
+    end
+    
+    % Get list of cleaned files (already processed)
+    existing_preprocessed = dir(fullfile(putstuff, 'Preprocessed', (sub), '*_preproc.mat'));
+    existing_names = erase({existing_preprocessed.name}, '_preproc.mat');
+    
+    file_list                   = dir(fullfile(data_dir, '*.vhdr'));                                            % Get a list of all .vhdr files
+    
+    for file_idx                = 1:length(file_list)
+        
+        % Get the current .vhdr file and construct associated file paths
+        vhdr_file               = fullfile(data_dir, file_list(file_idx).name);                                 % Full path to .vhdr file
+        [~, base_name, ~]       = fileparts(vhdr_file);
+        eeg_file                = fullfile(data_dir, [base_name, '.eeg']);                                      % Full path to corresponding .eeg file
+    
+        % Extract the base name and replace underscores with spaces
+        name                    = strrep(base_name, '_', ' ');                                                  % Replace '_' with ' ' in the base file name
+        
+        % Check if this dataset has already been processed
+        if any(strcmp(existing_names, base_name))
+            fprintf('Skipping already processed file: %s\n', base_name);
+            continue;
+        end
+
+        fprintf('Processing file (loading and preprocessing): %s (Name: %s)\n', vhdr_file, name);               % Debugging output
+            
+        
+            %%% PREPROCESSING STEPS:
+            
+            % segment data into trials with correct trialfunction
+            cfg                 = [];
+            cfg.trialfun        = 'trialfun_visgam_VR'; 
+            cfg.headerfile      = vhdr_file;                                                                    % Use dynamically assigned vhdr_file
+            cfg.datafile        = eeg_file;                                                                     % Use dynamically assigned eeg_file
+            trialdata           = ft_definetrial(cfg);
+
+
+            % preprocessing and rereferencing
+            cfg.implicitref     = 'TP9'; 'TP10';
+            cfg.reref           = 'yes';
+            cfg.refchannel      = 'average';
+            cfg.dftfilter       = 'yes';
+            cfg.dftfreq         = [48 49 50 51 52];
+            preproc_data        = ft_preprocessing(trialdata);
+            % hdr = ft_read_header(vhdr_file);
+            % cfg                 = [];
+            % cfg.headerfile      = vhdr_file;
+            % cfg.datafile        = eeg_file;
+            % cfg.continuous      = 'yes';
+            % cfg.implicitref     = {'TP10'};
+            % cfg.reref           = 'yes';
+            % cfg.refchannel      = setdiff(hdr.label, {'TP10'});
+            % cfg.dftfilter       = 'yes';
+            % cfg.dftfreq         = [50 100 150];
+            % preproc_data        = ft_preprocessing(cfg);
+            
+            % resampling
+            cfg                 = [];
+            cfg.resamplefs      = 500;
+            resampdata          = ft_resampledata(cfg, preproc_data);
+    
+    
+        % Save the preprocessed data
+        save(fullfile(preproc_dir, [base_name, '_preproc.mat']), 'resampdata');
+    
+    end
+
+
+
+%% 2: Load preprocessed data and Clean (TO BE REVISED - IMPLEMENT SEMIAUTOMATIC ARTIFACT REMOVAL)
+        
+    file_list                   = dir(fullfile(preproc_dir, '*.mat'));                                          % Get a list of all .mat files
+    
+    % Ensure output dir exists
+   
+    cleaned_dir = fullfile(putstuff, 'Cleaned', (sub));
+    if ~exist(cleaned_dir, 'dir')
+        mkdir(cleaned_dir);
+    end
+
+    % Get list of cleaned files (already processed)
+    existing_cleaned = dir(fullfile(putstuff, 'Cleaned',(sub), '*_cleaned.mat'));
+    existing_names = erase({existing_cleaned.name}, '_cleaned.mat');
+        
+
+
+    for file_idx = 1:length(file_list)
+    
+        [~, base_name, ~] = fileparts(file_list(file_idx).name);                                                % e.g., 'IT001-001_preproc'
+        dataset_id = erase(base_name, '_preproc');                                                              % e.g., 'IT001-001'
+    
+        % Check if this dataset has already been processed
+        if any(strcmp(existing_names, dataset_id))
+            fprintf('Skipping already processed file: %s\n', base_name);
+            continue;
+        end
+    
+        % Load preprocessed data
+        preproc_file = fullfile(preproc_dir, [base_name, '.mat']);
+        if ~isfile(preproc_file)
+            fprintf('Preproc file not found for %s. Skipping.\n', base_name);
+            continue;
+        end
+        load(preproc_file, 'resampdata');
+    
+         
+        fprintf('Processing file (Cleaning): %s\n', base_name)                                                  % Debugging output
+         
+    
+            %% CLEANING STEPS:
+    
+            % visual artifact detection
+            cfg                                 = [];
+            cfg.preproc.demean                  = 'yes';
+            cfg.preproc.detrend                 = 'yes';
+            cfg.ylim                            = [-100 100];
+            brodata                             = ft_databrowser(cfg, resampdata);
+
+            % visual artifact rejection
+            cfg                                 = [];                                                           
+            cfg.artfctdef.visual.artifact       = brodata.artfctdef.visual.artifact;
+            cfg.artfctdef.reject                = 'complete';
+            data_clean                          = ft_rejectartifact(cfg, resampdata);
+
+            % identify bad channels
+            % cfg                                 = [];
+            % cfg.demean                          = 'yes';
+            % cfg.detrend                         = 'yes';
+            % cfg.ylim                            = [-30 30];
+            %ft_databrowser(cfg, data_clean)
+            badchannel                          = input('badchannel');                                                          % {'Fp1', 'Fp2', '...', '...'}, always put ground and ref channel in here too
+
+            % prepare neighbours for channel repair
+            cfg = [];
+            cfg.channel                         = 'all' ;
+            cfg.method                          = 'triangulation';
+            cfg.template                        = 'easycap64ch-avg_neighb.mat';
+            cfg.layout                          = 'easycapM11.mat';
+            neighbours                          = ft_prepare_neighbours(cfg, data_clean);
+
+            % repair bad channels
+            cfg = [];
+            cfg.badchannel                      = badchannel;
+            cfg.method                          = 'average';
+            cfg.neighbours                      = neighbours;
+            data_fixed                          = ft_channelrepair(cfg,data_clean);
+
+
+        % Save the cleaned data
+        name = strrep(base_name, 'preproc', 'cleaned');                                      % Replace 'preproc' with 'cleaned' in filename  
+        save(fullfile(cleaned_dir, name), 'data_fixed', '-v7.3');                                                        % to prevent filenames from getting too long
+
+    end
+
+
+
+%% 3: ICA
+                                                                                                   % closing matlab or losing your workspace
+    file_list = dir(fullfile(cleaned_dir, '*.mat'));                                         % Get a list of all .mat files
+    
+    % Ensure output dir exists
+    postica_dir = fullfile(putstuff, 'PostICA', (sub));
+    if ~exist(postica_dir, 'dir')
+        mkdir(postica_dir);
+    end
+    
+    % Get list of postica files (already processed)
+    existing_postica = dir(fullfile(putstuff, 'PostICA', (sub), '*_postica.mat'));
+    existing_names = erase({existing_postica.name}, '_postica.mat');
+
+     
+    for file_idx = 1:length(file_list)
+    
+        [~, base_name, ~] = fileparts(file_list(file_idx).name); % e.g., 'IT001-001_cleaned'
+        dataset_id = erase(base_name, '_cleaned');               % e.g., 'IT001-001'
+    
+        % Check if this dataset has already been processed
+        if any(strcmp(existing_names, dataset_id))
+            fprintf('Skipping already processed file: %s\n', base_name);
+            continue;
+        end
+    
+        % Load cleaned data
+        cleaned_file = fullfile(cleaned_dir, [base_name, '.mat']);
+        if ~isfile(cleaned_file)
+            fprintf('Cleaned file not found for %s. Skipping.\n', base_name);
+            continue;
+        end
+        load(cleaned_file, 'data_fixed');
+    
+          
+        fprintf('Processing file (ICA): %s\n', base_name)                                            % Debugging output        
+
+
+
+            %%% ICA STEPS:
+
+            % ICA decomposition
+            cfg                 = [];
+            cfg.method          = 'fastica';
+            data_comp           = ft_componentanalysis(cfg, data_fixed);                                        % using the data without atypical artifacts
+            
+            
+            % Identifying artifactual components
+            cfg                 = [];
+            cfg.layout          = 'acticap-64ch-standard2.mat';  
+            cfg.marker          = 'off';                            
+            
+            % First window: Components 1–15
+            % cfg.component = 1:20;                                                                         % Select components 1–21
+            % figure('Name', 'Components 1–20', 'NumberTitle', 'off');                                            % Create a new figure
+            % ft_topoplotIC(cfg, data_comp);                                                                      % Plot the first group of components
+            ft_databrowser(cfg, data_comp)
+            
+            % % Second window: Components 21–40
+            % cfg.component = 21:40;                                                                        % Select components 22–42
+            % figure('Name', 'Components 21–40', 'NumberTitle', 'off');                                           % Create a new figure
+            % ft_topoplotIC(cfg, data_comp);                                                                      % Plot the second group of components
+            
+            % % Last window: Components 16 to last component
+            % last_component = size(data_comp.topo, 2);                                                      % Determine the total number of components
+            % cfg.component = 16:last_component;                                                            % Select components 43 to the last one
+            % figure('Name', sprintf('Components 43-%d', last_component), 'NumberTitle', 'off');                  % Create a new figure
+            % ft_topoplotIC(cfg, data_comp);                                                                      % Plot the third group of components
+
+             
+            % remove the bad components                                                                         % Best to close the topoplots before hitting Enter for the bad 
+            cfg                 = [];                                                                           % components, so topoplots of different datasets don't pile up
+            cfg.component       = input('badcomponents');                                                       % badcomponents = [.., ...]
+            data_postica        = ft_rejectcomponent(cfg, data_comp, data_fixed );
+
+
+
+        % Save the cleaned data
+        name                    = strrep(base_name, 'cleaned', 'postica');                                      % Replace 'cleaned' with 'postica' in filename  
+        save(fullfile(postica_dir, name), 'data_postica', '-v7.3');                                                      % to prevent filenames from getting too long
+                                                                                                                
+    end
