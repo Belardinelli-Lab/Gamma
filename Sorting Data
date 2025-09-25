@@ -1,0 +1,43 @@
+%% Sort data according to whatever you need
+
+    src_folder = 'D:\Users\melis\Documents\SANIONA\Cohort3\Preprocessed'; % Set your folder path here
+    dest_A = fullfile(src_folder, 'IT001-024');
+    dest_B = fullfile(src_folder, 'IT001-025');
+    dest_C = fullfile(src_folder, 'IT001-026');
+    dest_D = fullfile(src_folder, 'IT001-027');
+    dest_E = fullfile(src_folder, 'IT001-028');
+    dest_F = fullfile(src_folder, 'IT001-030');
+    
+    % Make sure destination folders exist
+    if ~exist(dest_A, 'dir'), mkdir(dest_A); end
+    if ~exist(dest_B, 'dir'), mkdir(dest_B); end
+    if ~exist(dest_C, 'dir'), mkdir(dest_C); end
+    if ~exist(dest_D, 'dir'), mkdir(dest_D); end
+    if ~exist(dest_E, 'dir'), mkdir(dest_E); end
+    if ~exist(dest_F, 'dir'), mkdir(dest_F); end
+    
+    % Get all files in the source folder
+    files = dir(fullfile(src_folder, '*'));
+    
+    for k = 1:length(files)
+        name = files(k).name;
+        if files(k).isdir || startsWith(name, '.') % Skip folders/hidden
+            continue
+        end
+    
+        src_file = fullfile(src_folder, name);
+    
+        if contains(name, 'IT001-024')
+            movefile(src_file, fullfile(dest_A, name));
+        elseif contains(name, 'IT001-025') 
+            movefile(src_file, fullfile(dest_B, name));
+        elseif contains(name, 'IT001-026')
+            movefile(src_file, fullfile(dest_C, name));
+        elseif contains(name, 'IT001-027') 
+            movefile(src_file, fullfile(dest_D, name));
+        elseif contains(name, 'IT001-028') 
+            movefile(src_file, fullfile(dest_E, name));
+        elseif contains(name, 'IT001-030')
+            movefile(src_file, fullfile(dest_F, name));
+        end
+    end
