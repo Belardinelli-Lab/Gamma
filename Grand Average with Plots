@@ -1,0 +1,404 @@
+%%%% CHOOSE EITHER 6A or 6 B %%%%
+
+
+
+%% 6A: Grand Average across cohorts, conditions, and groups KEEPINDIVIDUALS
+    % Uses freq_stim_bl structures and *_BL.mat files
+    % Conditions: RUNIN_PRE, DAY3_T2, DAY9_T2 split into g10 (1.0) and g12 (1.2)
+    
+    % --- Directories ---
+    root_dirs = {
+        'D:\Users\melis\Documents\SANIONA\Cohort1-2\cohort1\BaselineCorrected'
+        'D:\Users\melis\Documents\SANIONA\Cohort1-2\cohort2\BaselineCorrected'
+    };
+    GA_dir = fullfile('D:\Users\melis\Documents\SANIONA\GA');
+    if ~exist(GA_dir, 'dir'), mkdir(GA_dir); end
+    
+    % --- Mapping from condition label -> filename token ---
+    cond_map.RUNIN_PRE = 'RUNIN-PRE';
+    cond_map.DAY3_T2   = 'DAY3-T2';
+    cond_map.DAY9_T2   = 'DAY9-T2'; % same token for g10/g12
+    
+    % --- Groups defined per condition ---
+    groups.RUNIN_PRE.drug     = {'001','003','004','006','015','016','018','019','020','022'};
+    groups.RUNIN_PRE.placebo  = {'007','008','013','014'};
+    
+    groups.DAY3_T2.drug       = {'001','003','004','006','015','016','018','019','020','022'};
+    groups.DAY3_T2.placebo    = {'007','008','013','014'};
+    
+    groups.DAY9_T2_g10.drug   = {'015','016','018','020','XXX','YYY'}; % 1.0 mg
+    groups.DAY9_T2_g10.placebo= {'007','008'};
+    
+    groups.DAY9_T2_g12.drug   = {'019','022','001','003'};             % 1.2 mg
+    groups.DAY9_T2_g12.placebo= {'013','014'};
+    
+    % --- Storage ---
+    GA_ind = struct();
+
+
+
+    % STEP 1: Loop through conditions and groups
+    for cond_str = fieldnames(groups)'   % e.g. RUNIN_PRE, DAY3_T2, DAY9_T2_g10, DAY9_T2_g12
+        cond_str = cond_str{1};
+        fprintf('\n=== Condition: %s ===\n', cond_str);
+    
+        % Map to filename token
+        search_cond = cond_str;
+        if startsWith(cond_str,'DAY9_T2')
+            search_cond = 'DAY9_T2'; % both g10/g12 use same files
+        end
+        token = cond_map.(search_cond);
+    
+        group_defs = groups.(cond_str);
+    
+        for g = fieldnames(group_defs)'  % drug vs placebo
+            group_name = g{1};
+            subj_list = group_defs.(group_name);
+            freq_stim_array = cell(1, numel(subj_list));
+    
+            for ii = 1:numel(subj_list)
+                subj_id = subj_list{ii};
+                pid = sprintf('IT001-%s', subj_id);
+    
+                % --- Search in both cohorts ---
+                found_file = '';
+                for r = 1:numel(root_dirs)
+                    part_path = fullfile(root_dirs{r}, pid);
+                    all_files = dir(fullfile(part_path, '*BL.mat'));
+                    names = {all_files.name};
+                    match_idx = contains(names, token, 'IgnoreCase', true);
+                    if any(match_idx)
+                        found_file = fullfile(part_path, all_files(find(match_idx,1)).name);
+                        break;
+                    end
+                end
+    
+                if isempty(found_file)
+                    warning('No file found for %s | %s', subj_id, cond_str);
+                    continue;
+                end
+    
+                % --- Load and average over trials ---
+                S = load(found_file, 'freq_stim_bl');
+                if ~isfield(S, 'freq_stim_bl')
+                    warning('No freq_stim_bl in %s', found_file);
+                    continue;
+                end
+    
+                cfg = [];
+                cfg.avgoverrpt = 'yes';
+                freq_stim_array{ii} = ft_freqdescriptives(cfg, S.freq_stim_bl);
+    
+                fprintf('Loaded %s (%s)\n', subj_id, cond_str);
+            end
+    
+            % Remove empties
+            freq_stim_array = freq_stim_array(~cellfun(@isempty, freq_stim_array));
+    
+            if ~isempty(freq_stim_array)
+                % Restrict each subject to common time window
+                time_window = [0.25 0.75]; % example, adjust as needed
+                for i = 1:numel(freq_stim_array)
+                    cfg = [];
+                    cfg.latency = time_window;        % clip to common time range
+                    freq_stim_array{i} = ft_selectdata(cfg, freq_stim_array{i});
+                end
+                % Combine subjects, keep individuals
+                cfg = [];
+                cfg.keepindividual = 'yes';
+                GA_ind.(cond_str).(group_name) = ft_freqgrandaverage(cfg, freq_stim_array{:});
+                
+                % Average across time (subj x chan x freq x time → subj x chan x freq)
+                GA_ind.(cond_str).(group_name).powspctrm = squeeze(mean(GA_ind.(cond_str).(group_name).powspctrm, 4) );
+    
+                save(fullfile(GA_dir, sprintf('GA_%s_%s.mat', cond_str, group_name)), 'freq_stim_array');
+            else
+                warning('No valid data for %s | %s', cond_str, group_name);
+            end
+        end
+    end
+
+
+
+    % STEP 2: Compute scaling limits
+    zlim_map = struct(); % for TFRs
+    ylim_map = struct(); % for spectra
+    time_window = [0.25 0.75];
+
+    for cond_str = fieldnames(GA)'
+        cond_str = cond_str{1};
+
+        % --- TFR weakest condition drives scale ---
+        zmax_vals = [];
+        for g = fieldnames(GA.(cond_str))'
+            ga_data = GA.(cond_str).(g{1});
+            zmax_vals(end+1) = max(ga_data.powspctrm(:));
+        end
+        if ~isempty(zmax_vals)
+            zlim_map.(cond_str) = [0 min(zmax_vals)];
+        end
+
+    end
+
+
+
+%% 6B: Grand Average across cohorts, conditions, and groups WITHOUT KEEPINDIVIDUALS
+    % Uses freq_stim_bl structures and *_BL.mat files
+    % Conditions: RUNIN_PRE, DAY3_T2, DAY9_T2 split into g10 (1.0) and g12 (1.2)
+    
+    % --- Directories ---
+    root_dirs = {
+        'D:\Users\melis\Documents\SANIONA\Cohort1-2\cohort1\BaselineCorrected'
+        'D:\Users\melis\Documents\SANIONA\Cohort1-2\cohort2\BaselineCorrected'
+    };
+    GA_dir = fullfile('D:\Users\melis\Documents\SANIONA\GA');
+    if ~exist(GA_dir, 'dir'), mkdir(GA_dir); end
+    
+    % --- Mapping from condition label -> filename token ---
+    cond_map.RUNIN_PRE = 'RUNIN-PRE';
+    cond_map.DAY3_T2   = 'DAY3-T2';
+    cond_map.DAY9_T2   = 'DAY9-T2'; % same token for g10/g12
+    
+    % --- Groups defined per condition ---
+    groups.RUNIN_PRE.drug     = {'001','003','004','006','015','016','018','019','020','022'};
+    groups.RUNIN_PRE.placebo  = {'007','008','013','014'};
+    
+    groups.DAY3_T2.drug       = {'001','003','004','006','015','016','018','019','020','022'};
+    groups.DAY3_T2.placebo    = {'007','008','013','014'};
+    
+    groups.DAY9_T2_g10.drug   = {'015','016','018','020','XXX','YYY'}; % 1.0 mg
+    groups.DAY9_T2_g10.placebo= {'007','008'};
+    
+    groups.DAY9_T2_g12.drug   = {'019','022','001','003'};             % 1.2 mg
+    groups.DAY9_T2_g12.placebo= {'013','014'};
+    
+    % --- Storage ---
+    GA = struct();
+
+
+
+    %%%Loop through conditions and groups
+    for cond_str = fieldnames(groups)'   % e.g. RUNIN_PRE, DAY3_T2, DAY9_T2_g10, DAY9_T2_g12
+        cond_str = cond_str{1};
+        fprintf('\n=== Condition: %s ===\n', cond_str);
+    
+        % Map to filename token
+        search_cond = cond_str;
+        if startsWith(cond_str,'DAY9_T2')
+            search_cond = 'DAY9_T2'; % both g10/g12 use same files
+        end
+        token = cond_map.(search_cond);
+    
+        group_defs = groups.(cond_str);
+    
+        for g = fieldnames(group_defs)'  % drug vs placebo
+            group_name = g{1};
+            subj_list = group_defs.(group_name);
+            freq_stim_array = cell(1, numel(subj_list));
+    
+            for ii = 1:numel(subj_list)
+                subj_id = subj_list{ii};
+                pid = sprintf('IT001-%s', subj_id);
+    
+                % --- Search in both cohorts ---
+                found_file = '';
+                for r = 1:numel(root_dirs)
+                    part_path = fullfile(root_dirs{r}, pid);
+                    all_files = dir(fullfile(part_path, '*BL.mat'));
+                    names = {all_files.name};
+                    match_idx = contains(names, token, 'IgnoreCase', true);
+                    if any(match_idx)
+                        found_file = fullfile(part_path, all_files(find(match_idx,1)).name);
+                        break;
+                    end
+                end
+    
+                if isempty(found_file)
+                    warning('No file found for %s | %s', subj_id, cond_str);
+                    continue;
+                end
+    
+                % --- Load and average over trials ---
+                S = load(found_file, 'freq_stim_bl');
+                if ~isfield(S, 'freq_stim_bl')
+                    warning('No freq_stim_bl in %s', found_file);
+                    continue;
+                end
+    
+                cfg = [];
+                cfg.avgoverrpt = 'yes';
+                freq_stim_array{ii} = ft_freqdescriptives(cfg, S.freq_stim_bl);
+    
+                fprintf('Loaded %s (%s)\n', subj_id, cond_str);
+            end
+    
+            % Remove empties
+            freq_stim_array = freq_stim_array(~cellfun(@isempty, freq_stim_array));
+    
+            if ~isempty(freq_stim_array)
+                cfg = [];
+                GA.(cond_str).(group_name) = ft_freqgrandaverage(cfg, freq_stim_array{:});
+    
+                save(fullfile(GA_dir, sprintf('GA_%s_%s.mat', cond_str, group_name)), 'freq_stim_array');
+            else
+                warning('No valid data for %s | %s', cond_str, group_name);
+            end
+        end
+    end
+
+
+ %% 6.1: Plot GA TFRs (check and adjust if you want to plot GA or GA_ind)
+        for cond_str = fieldnames(GA)'
+            cond_str = cond_str{1};
+            for g = fieldnames(GA.(cond_str))' 
+                group_name = g{1};
+                ga_data = GA.(cond_str).(group_name);
+        
+                % Layout
+                cfg = [];
+                cfg.layout = 'easycapM1.mat';
+                layout = ft_prepare_layout(cfg);
+        
+                % TFR plot
+                cfg = [];
+                cfg.baseline     = [-0.5 -0.1];
+                cfg.baselinetype = 'relative';
+                cfg.xlim         = [-0.1 0.75];
+                cfg.ylim         = [30 80];
+                cfg.zlim         = [1 2.1];
+                cfg.channel      = {'O1','Oz','O2'};
+                cfg.colorbar     = 'yes';
+                cfg.colorbartext = 'Power (db)';
+                cfg.layout       = layout;
+                cfg.title        = sprintf('%s - %s', cond_str, group_name);
+        
+                % if isfield(zlim_map, cond_str)
+                %     cfg.zlim = zlim_map.(cond_str);
+                % end
+        
+                fig = figure('Name', sprintf('GA_%s_%s', cond_str, group_name), 'NumberTitle', 'off');
+                ft_singleplotTFR(cfg, ga_data);
+                xlabel('Time (s)'); ylabel('Frequency (Hz)');
+        
+                savefig(fig, fullfile(GA_dir, sprintf('GA_%s_%s.fig', cond_str, group_name)));
+                exportgraphics(fig, fullfile(GA_dir, sprintf('GA_%s_%s.png', cond_str, group_name)), 'Resolution', 300);
+                close(fig);
+            end
+        end
+
+
+
+%% Plot GA Powerspectra with or withour error shades
+
+    ERP_1 = GA_ind.RUNIN_PRE.placebo   %HV;     % Gruppo 1
+    ERP_2 = GA_ind.DAY3_T2.placebo  %VSS;       % Gruppo 2
+    ERP_3 = GA_ind.DAY9_T2_g10.placebo          % Group 3
+    ERP_4 = GA_ind.DAY9_T2_g12.placebo          % Group 4
+    
+    
+    % Mean and  SEM all channels
+    ERP_group_1 = squeeze(nanmean(ERP_1.powspctrm, 1));  % [channels x freq]
+    ERP_group_mean_1 = mean(ERP_group_1, 1);             % [1 x freq]
+    ERP_std_1 = squeeze(std(ERP_1.powspctrm, 0, 1)) / sqrt(size(ERP_1.powspctrm, 1));
+    ERP_std_mean_1 = mean(ERP_std_1, 1);                 % [1 x freq]
+    
+    ERP_group_2 = squeeze(nanmean(ERP_2.powspctrm, 1));  % [channels x freq]
+    ERP_group_mean_2 = mean(ERP_group_2, 1);             % [1 x freq]
+    ERP_std_2 = squeeze(std(ERP_2.powspctrm, 0, 1)) / sqrt(size(ERP_2.powspctrm, 1));
+    ERP_std_mean_2 = mean(ERP_std_2, 1);                 % [1 x freq]
+    
+    ERP_group_3 = squeeze(nanmean(ERP_3.powspctrm, 1));  % [channels x freq]
+    ERP_group_mean_3 = mean(ERP_group_3, 1);             % [1 x freq]
+    ERP_std_3 = squeeze(std(ERP_3.powspctrm, 0, 1)) / sqrt(size(ERP_3.powspctrm, 1));
+    ERP_std_mean_3 = mean(ERP_std_3, 1);                 % [1 x freq]
+    
+    ERP_group_4 = squeeze(nanmean(ERP_4.powspctrm, 1));  % [channels x freq]
+    ERP_group_mean_4 = mean(ERP_group_4, 1);             % [1 x freq]
+    ERP_std_4 = squeeze(std(ERP_4.powspctrm, 0, 1)) / sqrt(size(ERP_4.powspctrm, 1));
+    ERP_std_mean_4 = mean(ERP_std_4, 1);                 % [1 x freq]
+    %% === PLOT ERROR SHADE ===
+
+
+    % --- ERROR SHADE yes or no? ---
+      ERROR_SHADE = input('ERROR SHADE yes or no?', 's');
+
+    % Apply Error shade strategy
+            switch lower(ERROR_SHADE)
+                case 'yes'
+                    f = figure('Color','w');
+                    hold on;
+                    
+                    % Plot group 1 (RUNIN_PRE)
+                    x = ERP_1.freq;
+                    y = ERP_group_mean_1;
+                    err = ERP_std_mean_1;
+                    fill([x fliplr(x)], [y+err fliplr(y-err)], 'b', 'FaceAlpha', 0.2, 'EdgeColor', 'none');
+                    plot(x, y, 'b', 'LineWidth', 2);
+                    % plot(xlim, [0 0], 'k--', 'LineWidth', 1.5);
+                    hold on
+                    % Plot group 2 (DAY3_T2_g08)
+                    x = ERP_2.freq;
+                    y = ERP_group_mean_2;
+                    err = ERP_std_mean_2;
+                    fill([x fliplr(x)], [y+err fliplr(y-err)], 'c', 'FaceAlpha', 0.2, 'EdgeColor', 'none');
+                    plot(x, y, 'c', 'LineWidth', 2);
+                    hold on
+                    % Plot group 3 (DAY9_T2_g10)
+                    x = ERP_3.freq;
+                    y = ERP_group_mean_3;
+                    err = ERP_std_mean_3;
+                    fill([x fliplr(x)], [y+err fliplr(y-err)], [1.0 0.63 0.48], 'FaceAlpha', 0.2, 'EdgeColor', 'none');
+                    plot(x, y, 'Color', [1.0 0.63 0.48], 'LineWidth', 2);
+                    hold on
+                    % Plot group 4 (DAY9_T2_g12)
+                    x2 = ERP_4.freq;
+                    y2 = ERP_group_mean_4;
+                    err2 = ERP_std_mean_4;
+                    fill([x2 fliplr(x2)], [y2+err2 fliplr(y2-err2)], 'm', 'FaceAlpha', 0.2, 'EdgeColor', 'none');
+                    plot(x2, y2, 'm', 'LineWidth', 2);
+                    % Opzionals
+                    xlim([38 72])
+                    % ylim([1 2.2])
+                    xlabel('Frequency (Hz)')
+                    ylabel('Power (db)')
+                    legend({'RUN-IN', '', '0.8 mg/kg BID', '', '1.0 mg/kg BID', '', '1.2 mg/kg BID', ''}, 'Location', 'northeast')  % '' per le bande
+                                   
+                    box off
+                    set(gca, 'LineWidth', 2, 'FontSize', 16, 'FontWeight', 'demi', 'FontName', 'calibri');
+    
+                case 'no'
+                    f = figure('Color','w');
+                    hold on;
+                    
+                    % Plot group 1 (RUNIN_PRE)
+                    x = ERP_1.freq;
+                    y = ERP_group_mean_1;
+                    plot(x, y, 'b', 'LineWidth', 2);
+                    % plot(xlim, [0 0], 'k--', 'LineWidth', 1.5);
+                    hold on
+                    % Plot group 2 (DAY3_T2_g08)
+                    x = ERP_2.freq;
+                    y = ERP_group_mean_2;
+                    plot(x, y, 'c', 'LineWidth', 2);
+                    hold on
+                    % Plot group 3 (DAY9_T2_g10)
+                    x = ERP_3.freq;
+                    y = ERP_group_mean_3;
+                    plot(x, y, 'Color', [1.0 0.63 0.48], 'LineWidth', 2);
+                    hold on
+                    % Plot group 4 (DAY9_T2_g12)
+                    x2 = ERP_4.freq;
+                    y2 = ERP_group_mean_4;
+                    plot(x2, y2, 'm', 'LineWidth', 2);
+                    % Opzionals
+                    xlim([38 72])
+                    % ylim([1 2.2])
+                    xlabel('Frequency (Hz)')
+                    ylabel('Power (db)')
+                    legend({'RUN-IN', '0.8 mg/kg BID', '1.0 mg/kg BID', '1.2 mg/kg BID'}, 'Location', 'northeast')  % '' per le bande
+                    
+                    box off
+                    set(gca, 'LineWidth', 2, 'FontSize', 16, 'FontWeight', 'demi', 'FontName', 'calibri');
+                otherwise
+                    error('No Option selected: %s', scaling_mode);
+            end
