@@ -5,8 +5,8 @@ The order of the scripts of the analysis is:
 
  1. Preprocessing
     
- 3. Time-Frequency-Analysis including baseline correction
+ 2. Time-Frequency-Analysis including baseline correction
     
  3.A  Powerspectrum
 
-   3.B  Grand Average
+ 3.B  Grand Average
