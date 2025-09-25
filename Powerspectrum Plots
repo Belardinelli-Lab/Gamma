@@ -1,0 +1,136 @@
+%% 7: Powerspectrum
+    % Unified y-limit plotting across RUNIN, DAY3, DAY9 per subject
+        % Uses freq_stim_bl structures and *_BL.mat files
+        
+        root_dir = 'D:\Users\melis\Documents\SANIONA\Cohort1-2\cohort1\BaselineCorrected';
+        participant_dirs = dir(fullfile(root_dir, 'IT*'));
+        y_lim_map = containers.Map();
+        
+        time_window = [0.25 0.75];
+        conds = {'PRE', 'T1', 'T2'};
+        days  = {'RUNIN', 'DAY3', 'DAY9'};
+        
+        % STEP 1: Compute y-limits
+        for p = 1:length(participant_dirs)
+            participant_path = fullfile(root_dir, participant_dirs(p).name);
+            all_files = dir(fullfile(participant_path, '*_BL.mat'));
+            y_vals = [];
+        
+            for d = 1:numel(days)
+                files_day = {all_files(contains({all_files.name}, days{d})).name};
+                if isempty(files_day), continue; end
+        
+                for c = 1:numel(conds)
+                    file_c = files_day(contains(files_day, conds{c}));
+                    if isempty(file_c), continue; end
+        
+                    [avg_pow, ~] = process_file(fullfile(participant_path, file_c{1}), time_window);
+                    y_vals(end+1) = max(avg_pow);
+                end
+            end
+        
+            if ~isempty(y_vals)
+                y_lim_map(participant_dirs(p).name) = max(y_vals);
+            end
+        end
+        
+        % STEP 2: Plotting
+        for p = 1:length(participant_dirs)
+            participant_path = fullfile(root_dir, participant_dirs(p).name);
+            all_files = dir(fullfile(participant_path, '*_BL.mat'));
+          
+            for d = 1:numel(days)
+            day_str = days{d};
+            files_day = {all_files(contains({all_files.name}, day_str)).name};
+        
+                if isempty(files_day)
+                    fprintf('Skipping %s: No files for %s\n', participant_dirs(p).name, day_str);
+                    continue;
+                end
+            
+                try
+                    fig = figure('Name', sprintf('%s - %s', participant_dirs(p).name, day_str), 'NumberTitle', 'off');
+                    hold on;
+            
+                    colors = {'c-', 'm-', 'b-'};
+                    labels = {};
+                    f = [];
+            
+                    for c = 1:numel(conds)
+                        file_c = files_day(contains(files_day, conds{c}));
+                        if isempty(file_c), continue; end
+            
+                        [avg_pow, f] = process_file(fullfile(participant_path, file_c{1}), time_window);
+                        plot(f, avg_pow, colors{c}, 'LineWidth', 2);
+                        labels{end+1} = conds{c};
+                    end
+            
+                    xlim([38 72]);
+                    if isKey(y_lim_map, participant_dirs(p).name)
+                        ylim([0 y_lim_map(participant_dirs(p).name)]);
+                    end
+            
+                    xlabel('Frequency (Hz)');
+                    ylabel('Power (db)');
+                    title(sprintf('%s - %s', participant_dirs(p).name, day_str), 'Interpreter', 'none');
+                    legend(labels);
+                    grid on;
+                    hold off;
+            
+                    % Save
+                    out_dir = fullfile(participant_path, 'Figures');
+                    if ~exist(out_dir, 'dir'), mkdir(out_dir); end
+                    savefig(fullfile(out_dir, [day_str, '_power_BL.fig']));
+                    exportgraphics(gcf, fullfile(out_dir, [day_str, '_power_BL.png']), 'Resolution', 300);
+                    close(fig);
+            
+                catch ME
+                    warning('Failed plotting %s (%s)', day_str, ME.message);
+                    if exist('fig','var'), close(fig); end
+                end
+            end
+        end
+        
+        % --- Helper function for beta version ---
+        function [avg_pow, f] = process_file(filepath, time_window)
+            S = load(filepath, 'freq_stim_bl');
+            if ~isfield(S, 'freq_stim_bl')
+                error('File %s does not contain freq_stim_bl', filepath);
+            end
+            freq_stim_bl = S.freq_stim_bl;
+        
+            % Restrict time
+            time_idx = freq_stim_bl.time >= time_window(1) & freq_stim_bl.time <= time_window(2);
+            freq_stim_bl.time = freq_stim_bl.time(time_idx);
+            freq_stim_bl.powspctrm = freq_stim_bl.powspctrm(:, :, :, time_idx);
+        
+            % Average across trials, channels, time
+            avg_pow = squeeze(mean(mean(mean(freq_stim_bl.powspctrm, 1), 2), 4));
+            f = freq_stim_bl.freq;
+        end
+
+
+%% 7.1: Powerspectrum Sanity Check (Use when you doubt the loop on single subjects to check if the plots look correct)
+        % Define time window
+        time_window = [0.25 0.75];
+        time_idx = freq_stim_bl.time >= time_window(1) & freq_stim_bl.time <= time_window(2);
+        
+        % Update time axis
+        freq_stim_bl.time = freq_stim_bl.time(time_idx);
+        
+        % Update powspctrm: trials x channels x freqs x time
+        freq_stim_bl.powspctrm = freq_stim_bl.powspctrm(:, :, :, time_idx);
+        avg_pow = squeeze(mean(mean(mean(freq_stim_bl.powspctrm, 1), 2), 4));
+        % --- Get frequency vector ---
+        f = freq_stim_bl.freq;
+        
+        % --- Plot powerspectrum ---
+        figure;
+        plot(f, avg_pow, 'LineWidth', 2);
+        xlim([38 72]); % adjust to your range of interest
+        xlabel('Frequency (Hz)');
+        % ylim([0 0.5])
+        ylabel('Power (dB)');
+        title('Average Power Spectrum (0.25–0.75s, all trials/channels)');
+        grid on;
+    % File: scripts/powerspectrum_beta_BL.m
