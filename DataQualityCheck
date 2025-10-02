@@ -1,0 +1,210 @@
+root_dir   = 'D:\Users\melis\Documents\SANIONA\Cohort3\Data';
+report_dir = 'D:\Users\melis\Documents\SANIONA\Dataquality';
+report_file = fullfile(report_dir, 'Impedance_Report.mat');
+
+% Load existing report if available
+if exist(report_file, 'file')
+    load(report_file, 'report');
+    fprintf('Loaded existing report with %d entries.\n', numel(report));
+else
+    % Predefine struct fields
+    report = struct( ...
+        'subj_id', {}, ...
+        'filename', {}, ...
+        'table', {}, ...
+        'ref_channel', {}, ...
+        'montage_ok', {}, ...
+        'mean_imp', {}, ...
+        'n_high', {});
+    fprintf('No existing report found, starting fresh.\n');
+end
+
+% --- Loop through subjects ---
+subj_dirs = dir(fullfile(root_dir, 'IT001-*'));
+for s = 1:numel(subj_dirs)
+    subj_id = subj_dirs(s).name;
+    subj_path = fullfile(root_dir, subj_id);
+    vhdr_files = dir(fullfile(subj_path, '*.vhdr'));
+
+    subj_mean_vals = [];
+    subj_high_vals = [];
+    subj_montage_flags = [];
+
+    for f = 1:numel(vhdr_files)
+        vhdr_file = fullfile(subj_path, vhdr_files(f).name);
+
+        % --- Check if already in report ---
+        already_done = any(strcmp({report.filename}, vhdr_files(f).name) & ...
+                           strcmp({report.subj_id}, subj_id));
+        if already_done
+            fprintf('Skipping %s | %s (already in report)\n', subj_id, vhdr_files(f).name);
+            continue;
+        end
+
+        % --- Run impedance + montage check ---
+        [imp_table, montage_ok, ref_channel, mean_imp, n_high] = check_montage_and_impedance(vhdr_file);
+
+        % --- Add to report ---
+        entry = struct( ...
+            'subj_id', subj_id, ...
+            'filename', vhdr_files(f).name, ...
+            'table', imp_table, ...
+            'ref_channel', ref_channel, ...
+            'montage_ok', montage_ok, ...
+            'mean_imp', mean_imp, ...
+            'n_high', n_high);
+
+        report(end+1) = entry; %#ok<SAGROW>
+
+        % --- File-level output ---
+        fprintf('\n--- %s | %s ---\n', subj_id, vhdr_files(f).name);
+        fprintf('Reference channel: %s\n', ref_channel);
+        fprintf('Montage OK: %d\n', montage_ok);
+        fprintf('Mean impedance: %.2f kOhm | High channels (>5kΩ): %d\n', mean_imp, n_high);
+
+        % Collect subject-level values
+        subj_mean_vals(end+1)    = mean_imp;
+        subj_high_vals(end+1)    = n_high;
+        subj_montage_flags(end+1)= montage_ok;
+    end
+
+%% Helper Function 1
+function [imp_table, montage_ok, ref_channel, mean_imp, n_high] = check_montage_and_impedance(vhdr_file)
+    % Read file content
+    vhdr_txt = fileread(vhdr_file);
+    hdr = ft_read_header(vhdr_file);   % FieldTrip header
+    montage_labels = hdr.label;
+
+    % --- Extract reference channel ---
+    ref_channel = '';
+    ref_match = regexp(vhdr_txt, 'Reference Channel Name\s*=\s*([^\r\n]+)', 'tokens', 'once');
+    if ~isempty(ref_match)
+        ref_channel = strtrim(ref_match{1});
+    end
+
+    % --- Montage check ---
+    montage_ok = (numel(montage_labels) == 63) && ...
+                 ismember('TP9', montage_labels) && ...
+                 ~ismember('TP10', montage_labels) && ...
+                 strcmpi(ref_channel, 'TP10');
+
+    % --- Parse impedance block ---
+    imp_values = nan(numel(montage_labels), 1);
+
+    % Find the line where impedances start
+    start_idx = strfind(vhdr_txt, 'Impedance [kOhm]');
+    if ~isempty(start_idx)
+        % Extract text from "Impedance" to end
+        imp_text = extractAfter(vhdr_txt, start_idx);
+        % Split into lines
+        lines = strsplit(imp_text, '\n');
+        for i = 1:numel(lines)
+            % Match lines like: "Fp1:          1"
+            tokens = regexp(strtrim(lines{i}), '^(\w+):\s*(\d+)', 'tokens', 'once');
+            if ~isempty(tokens)
+                ch = tokens{1};
+                val = str2double(tokens{2});
+                idx = find(strcmpi(montage_labels, ch));
+                if ~isempty(idx)
+                    imp_values(idx) = val;
+                end
+            end
+        end
+    else
+        warning('No impedance block found in %s', vhdr_file);
+    end
+
+    % --- Create output table ---
+    imp_table = table(montage_labels(:), imp_values, ...
+        'VariableNames', {'Electrode','Impedance_kOhm'});
+
+    % --- Summary stats ---
+    mean_imp = mean(imp_values, 'omitnan');
+    n_high   = sum(imp_values > 5);   % count of electrodes above 5 kOhm
+end
+
+
+        % --- Subject-level summary ---
+        summarize_all_subjects(report, report_dir);
+
+end
+
+% Save updated report
+save(report_file, 'report');
+fprintf('\n✅ Report saved to %s (total entries: %d)\n', report_file, numel(report));
+
+%% Helper Function 2
+
+function summarize_all_subjects(report, report_dir)
+% Summarize impedance and montage consistency across all subjects
+% Creates one text report per subject in report_dir
+
+if ~exist(report_dir, 'dir')
+    mkdir(report_dir);
+end
+
+subj_ids = unique({report.subj_id}); % all unique subjects
+
+for s = 1:numel(subj_ids)
+    subj_id = subj_ids{s};
+    subj_mask = strcmp({report.subj_id}, subj_id);
+    subj_data = report(subj_mask);
+
+    % Prepare file
+    report_file = fullfile(report_dir, [subj_id '_report.txt']);
+    fid = fopen(report_file, 'w');
+    if fid == -1
+        warning('Could not open %s for writing.', report_file);
+        continue;
+    end
+
+    fprintf(fid, '=== SUMMARY for %s ===\n', subj_id);
+    fprintf('=== SUMMARY for %s ===\n', subj_id); % also print to console
+
+    if isempty(subj_data) || all(arrayfun(@(x) isempty(x.table) || all(isnan(x.table.Impedance_kOhm)), subj_data))
+        % No impedance values at all
+        msg = sprintf('No impedance values available in dataset %s\n', subj_id);
+        fprintf(fid, '%s\n', msg);
+        fprintf('%s\n', msg);
+    else
+        % Go through each dataset
+        for e = 1:numel(subj_data)
+            fname = subj_data(e).filename;
+            if isempty(subj_data(e).table) || all(isnan(subj_data(e).table.Impedance_kOhm))
+                msg = sprintf('  %s: No impedance values available\n', fname);
+                fprintf(fid, '%s\n', msg);
+                fprintf('%s\n', msg);
+            else
+                imp_table = subj_data(e).table;
+                mean_imp = mean(imp_table.Impedance_kOhm, 'omitnan');
+                high_idx = imp_table.Impedance_kOhm > 5;
+                high_chans = imp_table.Electrode(high_idx);
+
+                % Build message
+                msg = sprintf('  %s:\n     Avg impedance: %.2f kΩ\n     #ch >5 kΩ: %d\n', ...
+                    fname, mean_imp, sum(high_idx));
+
+                if isempty(high_chans)
+                    msg = [msg '     All electrodes ≤5 kΩ'];
+                else
+                    msg = [msg '     Electrodes >5 kΩ → ' strjoin(high_chans, ', ')];
+                end
+
+                fprintf(fid, '%s\n', msg);
+                fprintf('%s\n', msg);
+            end
+        end
+
+        % Montage summary
+        n_ok = sum([subj_data.montage_ok]);
+        msg = sprintf('Montage consistency: %d/%d sessions OK\n', n_ok, numel(subj_data));
+        fprintf(fid, '%s', msg);
+        fprintf('%s', msg);
+    end
+
+    fprintf(fid, '=============================\n');
+    fprintf('=============================\n');
+    fclose(fid);
+end
+end
+
