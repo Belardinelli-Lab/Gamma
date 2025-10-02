@@ -138,19 +138,22 @@ fprintf('\n✅ Report saved to %s (total entries: %d)\n', report_file, numel(rep
 function summarize_all_subjects(report, report_dir)
 % Summarize impedance and montage consistency across all subjects
 % Creates one text report per subject in report_dir
+% Also creates a group-level Excel summary across all subjects
 
 if ~exist(report_dir, 'dir')
     mkdir(report_dir);
 end
 
 subj_ids = unique({report.subj_id}); % all unique subjects
+excel_summary = {}; % collect rows for Excel
+row_idx = 1;
 
 for s = 1:numel(subj_ids)
     subj_id = subj_ids{s};
     subj_mask = strcmp({report.subj_id}, subj_id);
     subj_data = report(subj_mask);
 
-    % Prepare file
+    % Prepare subject-specific text file
     report_file = fullfile(report_dir, [subj_id '_report.txt']);
     fid = fopen(report_file, 'w');
     if fid == -1
@@ -166,6 +169,11 @@ for s = 1:numel(subj_ids)
         msg = sprintf('No impedance values available in dataset %s\n', subj_id);
         fprintf(fid, '%s\n', msg);
         fprintf('%s\n', msg);
+
+        % Excel row
+        excel_summary(row_idx,:) = {subj_id, 'N/A', NaN, NaN, 'N/A', NaN};
+        row_idx = row_idx + 1;
+
     else
         % Go through each dataset
         for e = 1:numel(subj_data)
@@ -174,6 +182,10 @@ for s = 1:numel(subj_ids)
                 msg = sprintf('  %s: No impedance values available\n', fname);
                 fprintf(fid, '%s\n', msg);
                 fprintf('%s\n', msg);
+
+                % Excel row
+                excel_summary(row_idx,:) = {subj_id, fname, NaN, NaN, 'No impedance values', subj_data(e).montage_ok};
+                row_idx = row_idx + 1;
             else
                 imp_table = subj_data(e).table;
                 mean_imp = mean(imp_table.Impedance_kOhm, 'omitnan');
@@ -186,12 +198,18 @@ for s = 1:numel(subj_ids)
 
                 if isempty(high_chans)
                     msg = [msg '     All electrodes ≤5 kΩ'];
+                    high_str = 'None';
                 else
                     msg = [msg '     Electrodes >5 kΩ → ' strjoin(high_chans, ', ')];
+                    high_str = strjoin(high_chans, ', ');
                 end
 
                 fprintf(fid, '%s\n', msg);
                 fprintf('%s\n', msg);
+
+                % Excel row
+                excel_summary(row_idx,:) = {subj_id, fname, mean_imp, sum(high_idx), high_str, subj_data(e).montage_ok};
+                row_idx = row_idx + 1;
             end
         end
 
@@ -206,5 +224,13 @@ for s = 1:numel(subj_ids)
     fprintf('=============================\n');
     fclose(fid);
 end
-end
 
+% --- Write group-level Excel file ---
+excel_file = fullfile(report_dir, 'AllSubjects_ImpedanceSummary.xlsx');
+excel_header = {'SubjectID','Filename','MeanImpedance_kOhm','NumChannels_gt5kOhm','Channels_gt5kOhm','MontageOK'};
+excel_table = cell2table(excel_summary, 'VariableNames', excel_header);
+writetable(excel_table, excel_file);
+
+fprintf('Excel summary written to %s\n', excel_file);
+
+end
