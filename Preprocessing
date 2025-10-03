@@ -1,40 +1,54 @@
-% Define the directory containing the BrainVision files
-    sub = 'IT001-013';
-    data_dir = fullfile('D:\Users\melis\Documents\SANIONA\Cohort2\Data', sub); 
-    putstuff = 'D:\Users\melis\Documents\SANIONA\Cohort2';
+%% Script to loop through entire folder of datafiles                                                           COMMENTS AND EXPLANATIONS
+                                                                                                                % Lines 5, 6 and 10 are the only lines in  
+% Restore MATLAB default path and add necessary paths                                                           % the entire script that need to be adjusted
+    restoredefaultpath
+    addpath 'C:\Users\melis\Documents\MATLAB\fieldtrip-20240731'
+    addpath 'C:\Users\melis\Documents\MATLAB\Scripts'
+    ft_defaults
+    
+    % Define the directory containing the BrainVision files
+    sub = 'IT001-025';
+    data_dir = fullfile('D:\Users\melis\Documents\SANIONA\Cohort3\Data'); 
+    putstuff = 'D:\Users\melis\Documents\SANIONA\Cohort3';
 
 
 %% 1: Load, preprocess, and save filtered data
     
-    % Create Output direction
-    preproc_dir                 =  fullfile(putstuff, 'Preprocessed', (sub));                                       % Directory to save preprocessed files
-    if ~exist(preproc_dir, 'dir')
-        mkdir(preproc_dir);                                                                                 % Create output directory if it doesn't exist
-    end
+    subj_dirs = dir(fullfile(data_dir, 'IT*'));   % all subject folders
+    subj_dirs = subj_dirs([subj_dirs.isdir]);     % keep only directories
     
-    % Get list of cleaned files (already processed)
-    existing_preprocessed = dir(fullfile(putstuff, 'Preprocessed', (sub), '*_preproc.mat'));
-    existing_names = erase({existing_preprocessed.name}, '_preproc.mat');
+    for s = 1:numel(subj_dirs)
+        subj_id   = subj_dirs(s).name;
+        subj_path = fullfile(data_dir, subj_id);
     
-    file_list                   = dir(fullfile(data_dir, '*.vhdr'));                                            % Get a list of all .vhdr files
-    
-    for file_idx                = 1:length(file_list)
-        
-        % Get the current .vhdr file and construct associated file paths
-        vhdr_file               = fullfile(data_dir, file_list(file_idx).name);                                 % Full path to .vhdr file
-        [~, base_name, ~]       = fileparts(vhdr_file);
-        eeg_file                = fullfile(data_dir, [base_name, '.eeg']);                                      % Full path to corresponding .eeg file
-    
-        % Extract the base name and replace underscores with spaces
-        name                    = strrep(base_name, '_', ' ');                                                  % Replace '_' with ' ' in the base file name
-        
-        % Check if this dataset has already been processed
-        if any(strcmp(existing_names, base_name))
-            fprintf('Skipping already processed file: %s\n', base_name);
-            continue;
+        % --- Create subject-specific output folder ---
+        preproc_dir = fullfile(putstuff, 'Preprocessed', subj_id);
+        if ~exist(preproc_dir, 'dir')
+            mkdir(preproc_dir);
         end
-
-        fprintf('Processing file (loading and preprocessing): %s (Name: %s)\n', vhdr_file, name);               % Debugging output
+    
+        % Already preprocessed?
+        existing_preprocessed = dir(fullfile(preproc_dir, '*_preproc.mat'));
+        existing_names = erase({existing_preprocessed.name}, '_preproc.mat');
+    
+        % Get all .vhdr files inside this subject’s folder
+        file_list = dir(fullfile(subj_path, '*.vhdr'));
+    
+        for file_idx = 1:numel(file_list)
+            vhdr_file = fullfile(subj_path, file_list(file_idx).name);
+            [~, base_name, ~] = fileparts(vhdr_file);
+            eeg_file = fullfile(subj_path, [base_name, '.eeg']);   % <--- fixed to subj_path
+    
+            % Extract the base name and replace underscores with spaces
+            name = strrep(base_name, '_', ' ');
+    
+            % Check if this dataset has already been processed
+            if any(strcmp(existing_names, base_name))
+                fprintf('Skipping already processed file: %s\n', base_name);
+                continue;
+            end
+    
+            fprintf('Processing file (loading and preprocessing): %s (Name: %s)\n', vhdr_file, name);
             
         
             %%% PREPROCESSING STEPS:
@@ -48,7 +62,7 @@
 
 
             % preprocessing and rereferencing
-            cfg.implicitref     = 'TP9'; 'TP10';
+            cfg.implicitref     =  'TP10';
             cfg.reref           = 'yes';
             cfg.refchannel      = 'average';
             cfg.dftfilter       = 'yes';
@@ -72,8 +86,10 @@
             resampdata          = ft_resampledata(cfg, preproc_data);
     
     
-        % Save the preprocessed data
+        % Save preprocessed data in subject-specific folder
         save(fullfile(preproc_dir, [base_name, '_preproc.mat']), 'resampdata');
+        fprintf('Finished preprocessing subject %s (%d files)\n', subj_id, numel(file_list));
+        end
     
     end
 
