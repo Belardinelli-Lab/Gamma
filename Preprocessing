@@ -293,6 +293,172 @@
             cfg.component       = input('badcomponents');                                                       % badcomponents = [.., ...]
             data_postica        = ft_rejectcomponent(cfg, data_comp, data_fixed );
 
+        %% 3: ICA
+    cleaned_dir = fullfile(putstuff, 'Cleaned', sub);    
+    file_list   = dir(fullfile(cleaned_dir, '*.mat'));                                                                                              % closing matlab or losing your workspace
+     
+    % Ensure output dir exists
+    postica_dir = fullfile(putstuff, 'PostICA', (sub));
+    if ~exist(postica_dir, 'dir')
+        mkdir(postica_dir);
+    end
+    
+    % Get list of postica files (already processed)
+    existing_postica = dir(fullfile(putstuff, 'PostICA', (sub), '*_postica.mat'));
+    existing_names = erase({existing_postica.name}, '_postica.mat');
+
+     
+    for file_idx = 1:length(file_list)
+    
+        [~, base_name, ~] = fileparts(file_list(file_idx).name); % e.g., 'IT001-001_cleaned'
+        dataset_id = erase(base_name, '_cleaned');               % e.g., 'IT001-001'
+    
+        % Check if this dataset has already been processed
+        if any(strcmp(existing_names, dataset_id))
+            fprintf('Skipping already processed file: %s\n', base_name);
+            continue;
+        end
+    
+        % Load cleaned data
+        cleaned_file = fullfile(cleaned_dir, [base_name, '.mat']);
+        if ~isfile(cleaned_file)
+            fprintf('Cleaned file not found for %s. Skipping.\n', base_name);
+            continue;
+        end
+        load(cleaned_file, 'data_fixed');
+    
+          
+        fprintf('Processing file (ICA): %s\n', base_name)                                            % Debugging output        
+            
+            %%% ICA STEPS:
+
+            % ICA decomposition
+            cfg                 = [];
+            cfg.method          = 'fastica';
+            data_comp           = ft_componentanalysis(cfg, data_fixed);                                        % using the data without atypical artifacts
+            
+            
+            % Identifying artifactual components
+            cfg                 = [];
+            cfg.layout          = 'easycapM11.mat';  
+            cfg.marker          = 'off';                            
+            
+            % First window: Components 1–15
+            % cfg.component = 1:20;                                                                         % Select components 1–21
+            % figure('Name', 'Components 1–20', 'NumberTitle', 'off');                                            % Create a new figure
+            % ft_topoplotIC(cfg, data_comp);                                                                      % Plot the first group of components
+            ft_databrowser(cfg, data_comp)
+            
+            % % Second window: Components 21–40
+            % cfg.component = 21:40;                                                                        % Select components 22–42
+            % figure('Name', 'Components 21–40', 'NumberTitle', 'off');                                           % Create a new figure
+            % ft_topoplotIC(cfg, data_comp);                                                                      % Plot the second group of components
+            
+            % % Last window: Components 16 to last component
+            % last_component = size(data_comp.topo, 2);                                                      % Determine the total number of components
+            % cfg.component = 16:last_component;                                                            % Select components 43 to the last one
+            % figure('Name', sprintf('Components 43-%d', last_component), 'NumberTitle', 'off');                  % Create a new figure
+            % ft_topoplotIC(cfg, data_comp);                                                                      % Plot the third group of components
+
+             
+            % remove the bad components                                                                         % Best to close the topoplots before hitting Enter for the bad 
+            cfg                 = [];                                                                           % components, so topoplots of different datasets don't pile up
+            cfg.component       = input('badcomponents');                                                       % badcomponents = [.., ...]
+            data_postica        = ft_rejectcomponent(cfg, data_comp, data_fixed );
+
+
+            % === Append ICA info to the matching section of the DataQuality report ===
+            qc_summary = struct();
+            base_name_clean = regexprep(base_name, '_cleaned$', '');  % remove '_cleaned' if present
+            qc_summary.filename = base_name_clean;
+            
+            if exist('cfg','var') && isfield(cfg,'component')
+                qc_summary.num_rejected_components = numel(cfg.component);
+            else
+                qc_summary.num_rejected_components = NaN;
+            end
+            
+            report_dir  = 'D:\Users\melis\Documents\SANIONA\Dataquality';
+            report_file = fullfile(report_dir, [sub '_report.txt']);
+            
+            if exist(report_file, 'file')
+                % Read the entire report into memory
+                fid = fopen(report_file, 'r');
+                file_text = fread(fid, '*char')';
+                fclose(fid);
+            
+                % Create the ICA QC text block
+                if isnan(qc_summary.num_rejected_components)
+                    ica_block = sprintf('\n=== ICA QC ===\nICA components rejected: not available\n');
+                else
+                    ica_block = sprintf('\n=== ICA QC ===\nICA components rejected: %d\n', qc_summary.num_rejected_components);
+                end
+            
+                % Find where this filename section ends
+                % === Find the corresponding section header in the report ===
+                possible_headers = { ...
+                    sprintf('=== %s ===', qc_summary.filename), ...
+                    sprintf('=== %s_cleaned ===', qc_summary.filename), ...
+                    sprintf('=== %s_preproc ===', qc_summary.filename), ...
+                    sprintf('=== %s_postica ===', qc_summary.filename) ...
+                };
+                
+                insert_pos = [];
+                for h = 1:numel(possible_headers)
+                    tmp = strfind(file_text, possible_headers{h});
+                    if ~isempty(tmp)
+                        insert_pos = tmp(1);
+                        matched_header = possible_headers{h};
+                        break;
+                    end
+                end
+                
+                if isempty(insert_pos)
+                    warning('⚠️ Filename section for %s not found in %s', qc_summary.filename, report_file);
+            
+                else
+                    % Check if ICA QC already exists for this dataset
+                    already_has_ica = contains(file_text(insert_pos:end), '=== ICA QC ===');
+            
+                    if already_has_ica
+                        fprintf('ℹ️ ICA QC section already exists for %s (%s)\n', sub, matched_header);
+                    else
+                        % Locate "Artifact Rejection QC" and insert ICA right after
+                        art_idx = strfind(file_text(insert_pos:end), '=== Artifact Rejection QC ===');
+                        if ~isempty(art_idx)
+                            % Find double newline after artifact section
+                            section_end = insert_pos + art_idx(1) + ...
+                                regexp(file_text(insert_pos+art_idx(1):end), '\n\n', 'once');
+                            if isempty(section_end)
+                                section_end = length(file_text);
+                            end
+                            % Insert ICA QC right after Artifact section
+                            new_text = [file_text(1:section_end) ica_block file_text(section_end+1:end)];
+                        else
+                            % If Artifact QC missing, insert after header
+                            section_end = insert_pos + length(matched_header);
+                            new_text = [file_text(1:section_end) ica_block file_text(section_end+1:end)];
+                        end
+            
+                        % Write updated report
+                        fid = fopen(report_file, 'w');
+                        fwrite(fid, new_text);
+                        fclose(fid);
+            
+                        fprintf('✅ ICA QC section inserted *after* Artifact Rejection QC for %s (%s)\n', sub, matched_header);
+                    end
+                end  % <-- closes the insert_pos check
+            else
+                warning('⚠️ Report file for %s not found in Dataquality folder.', sub);
+            end  % <-- closes the file existence check
+
+
+            % Save updated QC summary to PostICA folder
+            qc_file_post = fullfile(postica_dir, [sub '_QCsummary.mat']);
+            save(qc_file_post, 'qc_summary');
+            
+            fprintf('\nQC summary updated for %s\n', sub);
+            fprintf('→ Rejected ICA components: %d\n', qc_summary.num_rejected_components);
 
 
         % Save the cleaned data
