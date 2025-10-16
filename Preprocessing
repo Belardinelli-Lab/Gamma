@@ -173,6 +173,42 @@
             cfg.neighbours                      = neighbours;
             data_fixed                          = ft_channelrepair(cfg,data_clean);
 
+            % === Append visual artifact rejection info to existing DataQuality report ===
+            qc_summary = struct();
+            qc_summary.filename = base_name;  % e.g. IT001-024_DAY9_T1
+            qc_summary.num_trials_before = numel(resampdata.trial);
+            qc_summary.num_trials_after  = numel(data_clean.trial);
+            qc_summary.num_rejected_trials = qc_summary.num_trials_before - qc_summary.num_trials_after;
+            
+            if exist('badchannel','var') && ~isempty(badchannel)
+                qc_summary.bad_channels = badchannel;
+            else
+                qc_summary.bad_channels = {};
+            end
+            
+            % --- Locate subject’s report file ---
+            report_dir = 'D:\Users\melis\Documents\SANIONA\Dataquality';
+            report_file = fullfile(report_dir, [sub '_report.txt']);
+            
+            if exist(report_file, 'file')
+                fid = fopen(report_file, 'a'); % append mode
+                fprintf(fid, '\n\n=== %s ===\n', qc_summary.filename);
+                fprintf(fid, '=== Artifact Rejection QC ===\n');
+                fprintf(fid, 'Trials before cleaning: %d\n', qc_summary.num_trials_before);
+                fprintf(fid, 'Trials after cleaning:  %d\n', qc_summary.num_trials_after);
+                fprintf(fid, 'Trials rejected:        %d\n', qc_summary.num_rejected_trials);
+            
+                if ~isempty(qc_summary.bad_channels)
+                    fprintf(fid, 'Bad channels repaired: %s\n', strjoin(qc_summary.bad_channels, ', '));
+                else
+                    fprintf(fid, 'Bad channels repaired: none\n');
+                end
+                fclose(fid);
+                fprintf('Artifact QC appended to report for %s (%s)\n', sub, qc_summary.filename);
+            else
+                warning('⚠️ Report file for %s not found in Dataquality folder.', sub);
+            end
+            
 
         % Save the cleaned data
         name = strrep(base_name, 'preproc', 'cleaned');                                      % Replace 'preproc' with 'cleaned' in filename  
