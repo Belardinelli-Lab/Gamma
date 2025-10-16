@@ -9,5 +9,6 @@ The order of the scripts of the analysis is:
     
  3. Time-Frequency-Analysis including baseline correction
     
- 4. A Powerspectrum
-    B Grand Average
+ 4. A: Powerspectrum
+    
+    B: Grand Average
